@@ -27,6 +27,8 @@ class OITLinkedLists : public ApiVulkanSample
 	OITLinkedLists();
 	~OITLinkedLists();
 
+
+	void setup_framebuffer() override;
 	void setup_render_pass() override;
 	bool prepare(const vkb::ApplicationOptions &options) override;
 	bool resize(const uint32_t width, const uint32_t height) override;

@@ -47,9 +47,49 @@ OITLinkedLists::~OITLinkedLists()
 	object.reset();
 }
 
+void OITLinkedLists::setup_framebuffer()
+{
+	VkImageView attachments[3];
+
+	attachments[2] = linked_list_head_image_view->get_handle();
+
+	// Depth/Stencil attachment is the same for all frame buffers
+	attachments[1] = depth_stencil.view;
+
+	VkFramebufferCreateInfo framebuffer_create_info = {};
+	framebuffer_create_info.sType                   = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+	framebuffer_create_info.pNext                   = NULL;
+	framebuffer_create_info.renderPass              = render_pass;
+	framebuffer_create_info.attachmentCount         = 3;
+	framebuffer_create_info.pAttachments            = attachments;
+	framebuffer_create_info.width                   = get_render_context().get_surface_extent().width;
+	framebuffer_create_info.height                  = get_render_context().get_surface_extent().height;
+	framebuffer_create_info.layers                  = 1;
+
+	// Delete existing frame buffers
+	if (framebuffers.size() > 0)
+	{
+		for (uint32_t i = 0; i < framebuffers.size(); i++)
+		{
+			if (framebuffers[i] != VK_NULL_HANDLE)
+			{
+				vkDestroyFramebuffer(get_device().get_handle(), framebuffers[i], nullptr);
+			}
+		}
+	}
+
+	// Create frame buffers for every swap chain image
+	framebuffers.resize(get_render_context().get_render_frames().size());
+	for (uint32_t i = 0; i < framebuffers.size(); i++)
+	{
+		attachments[0] = swapchain_buffers[i].view;
+		VK_CHECK(vkCreateFramebuffer(get_device().get_handle(), &framebuffer_create_info, nullptr, &framebuffers[i]));
+	}
+}
+
 void OITLinkedLists::setup_render_pass()
 {
-	std::array<VkAttachmentDescription, 2> attachments = {};
+	std::array<VkAttachmentDescription, 3> attachments = {};
 	// Color attachment
 	attachments[0].format         = get_render_context().get_format();
 	attachments[0].samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -68,6 +108,15 @@ void OITLinkedLists::setup_render_pass()
 	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	attachments[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
 	attachments[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	// OIT attachment
+	attachments[1].format         = VK_FORMAT_R32_UINT;
+	attachments[1].samples        = VK_SAMPLE_COUNT_1_BIT;
+	attachments[1].loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+	attachments[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachments[1].initialLayout  = VK_IMAGE_LAYOUT_GENERAL;
+	attachments[1].finalLayout    = VK_IMAGE_LAYOUT_GENERAL;
 
 	VkAttachmentReference color_reference = {};
 	color_reference.attachment            = 0;
@@ -77,16 +126,20 @@ void OITLinkedLists::setup_render_pass()
 	depth_reference.attachment            = 1;
 	depth_reference.layout                = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+	VkAttachmentReference oit_image_reference = {};
+	oit_image_reference.attachment            = 2;
+	oit_image_reference.layout                = VK_IMAGE_LAYOUT_GENERAL;
+
 	VkSubpassDescription subpass_description    = {};
 	subpass_description.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
 	subpass_description.colorAttachmentCount    = 1;
 	subpass_description.pColorAttachments       = &color_reference;
 	subpass_description.pDepthStencilAttachment = &depth_reference;
-	subpass_description.inputAttachmentCount    = 0;
-	subpass_description.pInputAttachments       = nullptr;
+	subpass_description.inputAttachmentCount    = 1;
+	subpass_description.pInputAttachments       = &oit_image_reference;
 	subpass_description.preserveAttachmentCount = 0;
 	subpass_description.pPreserveAttachments    = nullptr;
-	subpass_description.pResolveAttachments     = nullptr;
+	subpass_description.pResolveAttachments     = nullptr; //&oit_image_reference;
 
 	// Subpass dependencies for layout transitions
 	std::array<VkSubpassDependency, 3> dependencies;
@@ -129,6 +182,7 @@ void OITLinkedLists::setup_render_pass()
 
 bool OITLinkedLists::prepare(const vkb::ApplicationOptions &options)
 {
+    create_sized_objects(width, height);
 	if (!ApiVulkanSample::prepare(options))
 	{
 		return false;
@@ -142,7 +196,7 @@ bool OITLinkedLists::prepare(const vkb::ApplicationOptions &options)
 	load_assets();
 	create_constant_buffers();
 	create_descriptors();
-	create_sized_objects(width, height);
+	//create_sized_objects(width, height);
 	create_pipelines();
 
 	update_scene_constants();
