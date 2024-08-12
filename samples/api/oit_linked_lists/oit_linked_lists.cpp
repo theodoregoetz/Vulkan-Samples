@@ -109,18 +109,20 @@ void OITLinkedLists::setup_render_pass()
 	attachments[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
 	attachments[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 	// OIT attachment
-	attachments[1].format         = VK_FORMAT_R32_UINT;
-	attachments[1].samples        = VK_SAMPLE_COUNT_1_BIT;
-	attachments[1].loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
-	attachments[1].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-	attachments[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[1].initialLayout  = VK_IMAGE_LAYOUT_GENERAL;
-	attachments[1].finalLayout    = VK_IMAGE_LAYOUT_GENERAL;
+	attachments[2].format         = VK_FORMAT_R32_UINT;
+	attachments[2].samples        = VK_SAMPLE_COUNT_1_BIT;
+	attachments[2].loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[2].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+	attachments[2].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachments[2].initialLayout  = VK_IMAGE_LAYOUT_GENERAL;
+	attachments[2].finalLayout    = VK_IMAGE_LAYOUT_GENERAL;
 
-	VkAttachmentReference color_reference = {};
-	color_reference.attachment            = 0;
-	color_reference.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	VkAttachmentReference color_references[2];
+	color_references[0].attachment            = 0;
+	color_references[0].layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	color_references[1].attachment            = 2;
+	color_references[1].layout                = VK_IMAGE_LAYOUT_GENERAL;
 
 	VkAttachmentReference depth_reference = {};
 	depth_reference.attachment            = 1;
@@ -132,14 +134,14 @@ void OITLinkedLists::setup_render_pass()
 
 	VkSubpassDescription subpass_description    = {};
 	subpass_description.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass_description.colorAttachmentCount    = 1;
-	subpass_description.pColorAttachments       = &color_reference;
+	subpass_description.colorAttachmentCount    = 2;
+	subpass_description.pColorAttachments       = color_references;
 	subpass_description.pDepthStencilAttachment = &depth_reference;
 	subpass_description.inputAttachmentCount    = 1;
 	subpass_description.pInputAttachments       = &oit_image_reference;
 	subpass_description.preserveAttachmentCount = 0;
 	subpass_description.pPreserveAttachments    = nullptr;
-	subpass_description.pResolveAttachments     = nullptr; //&oit_image_reference;
+	subpass_description.pResolveAttachments     = nullptr;
 
 	// Subpass dependencies for layout transitions
 	std::array<VkSubpassDependency, 3> dependencies;
@@ -182,11 +184,52 @@ void OITLinkedLists::setup_render_pass()
 
 bool OITLinkedLists::prepare(const vkb::ApplicationOptions &options)
 {
-    create_sized_objects(width, height);
-	if (!ApiVulkanSample::prepare(options))
+    if (!VulkanSample::prepare(options))
 	{
 		return false;
 	}
+
+	depth_format = vkb::get_suitable_depth_format(get_device().get_gpu().get_handle());
+
+	// Create synchronization objects
+	VkSemaphoreCreateInfo semaphore_create_info = vkb::initializers::semaphore_create_info();
+	// Create a semaphore used to synchronize image presentation
+	// Ensures that the current swapchain render target has completed presentation and has been released by the presentation engine, ready for rendering
+	VK_CHECK(vkCreateSemaphore(get_device().get_handle(), &semaphore_create_info, nullptr, &semaphores.acquired_image_ready));
+	// Create a semaphore used to synchronize command submission
+	// Ensures that the image is not presented until all commands have been sumbitted and executed
+	VK_CHECK(vkCreateSemaphore(get_device().get_handle(), &semaphore_create_info, nullptr, &semaphores.render_complete));
+
+	// Set up submit info structure
+	// Semaphores will stay the same during application lifetime
+	// Command buffer submission info is set by each example
+	submit_info                   = vkb::initializers::submit_info();
+	submit_info.pWaitDstStageMask = &submit_pipeline_stages;
+
+	if (window->get_window_mode() != vkb::Window::Mode::Headless)
+	{
+		submit_info.waitSemaphoreCount   = 1;
+		submit_info.pWaitSemaphores      = &semaphores.acquired_image_ready;
+		submit_info.signalSemaphoreCount = 1;
+		submit_info.pSignalSemaphores    = &semaphores.render_complete;
+	}
+
+	queue = get_device().get_suitable_graphics_queue().get_handle();
+
+	create_swapchain_buffers();
+	create_command_pool();
+	create_command_buffers();
+	create_synchronization_primitives();
+	setup_depth_stencil();
+	this->setup_render_pass();
+	create_pipeline_cache();
+	create_sized_objects(width, height);
+	this->setup_framebuffer();
+
+	width  = get_render_context().get_surface_extent().width;
+	height = get_render_context().get_surface_extent().height;
+
+	prepare_gui();
 
 	camera.type = vkb::CameraType::LookAt;
 	camera.set_position({0.0f, 0.0f, -4.0f});
@@ -196,7 +239,6 @@ bool OITLinkedLists::prepare(const vkb::ApplicationOptions &options)
 	load_assets();
 	create_constant_buffers();
 	create_descriptors();
-	//create_sized_objects(width, height);
 	create_pipelines();
 
 	update_scene_constants();
@@ -349,7 +391,7 @@ void OITLinkedLists::create_fragment_resources(const uint32_t width, const uint3
 {
 	{
 		const VkExtent3D image_extent = {width, height, 1};
-		linked_list_head_image        = std::make_unique<vkb::core::Image>(get_device(), image_extent, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, VK_SAMPLE_COUNT_1_BIT);
+		linked_list_head_image        = std::make_unique<vkb::core::Image>(get_device(), image_extent, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VMA_MEMORY_USAGE_GPU_ONLY, VK_SAMPLE_COUNT_1_BIT);
 		linked_list_head_image_view   = std::make_unique<vkb::core::ImageView>(*linked_list_head_image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R32_UINT);
 	}
 
@@ -482,8 +524,11 @@ void OITLinkedLists::create_pipelines()
 
 		VkPipelineRasterizationStateCreateInfo rasterization_state = vkb::initializers::pipeline_rasterization_state_create_info(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
 
-		VkPipelineColorBlendAttachmentState blend_attachment_state = vkb::initializers::pipeline_color_blend_attachment_state(0xF, VK_FALSE);
-		VkPipelineColorBlendStateCreateInfo color_blend_state      = vkb::initializers::pipeline_color_blend_state_create_info(1, &blend_attachment_state);
+
+		VkPipelineColorBlendAttachmentState blend_attachment_states[2];
+		blend_attachment_states[0] = vkb::initializers::pipeline_color_blend_attachment_state(0xF, VK_FALSE);
+		blend_attachment_states[1] = blend_attachment_states[0];
+		VkPipelineColorBlendStateCreateInfo color_blend_state      = vkb::initializers::pipeline_color_blend_state_create_info(2, blend_attachment_states);
 
 		VkPipelineMultisampleStateCreateInfo multisample_state = vkb::initializers::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT, 0);
 
@@ -548,13 +593,13 @@ void OITLinkedLists::create_pipelines()
 			vertex_input_state.vertexAttributeDescriptionCount = 0;
 			vertex_input_state.pVertexAttributeDescriptions    = nullptr;
 
-			blend_attachment_state.blendEnable         = VK_TRUE;
-			blend_attachment_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-			blend_attachment_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-			blend_attachment_state.colorBlendOp        = VK_BLEND_OP_ADD;
-			blend_attachment_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-			blend_attachment_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-			blend_attachment_state.alphaBlendOp        = VK_BLEND_OP_ADD;
+			blend_attachment_states[0].blendEnable         = VK_TRUE;
+			blend_attachment_states[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			blend_attachment_states[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			blend_attachment_states[0].colorBlendOp        = VK_BLEND_OP_ADD;
+			blend_attachment_states[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			blend_attachment_states[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+			blend_attachment_states[0].alphaBlendOp        = VK_BLEND_OP_ADD;
 
 			shader_stages[0] = load_shader("oit_linked_lists/combine.vert", VK_SHADER_STAGE_VERTEX_BIT);
 			shader_stages[1] = load_shader("oit_linked_lists/combine.frag", VK_SHADER_STAGE_FRAGMENT_BIT);
