@@ -16,18 +16,18 @@
  * limitations under the License.
  */
 
-layout (location = 0) in vec2 inUV;
+layout(location = 0) in vec2 inUV;
 
 ////////////////////////////////////////
 
 layout(set = 0, binding = 0) uniform SceneConstants
 {
-	mat4  projection;
-	mat4  view;
-	float background_grayscale;
-	uint  sortFragments;
-	uint  fragmentMaxCount;
-	uint  sortedFragmentCount;
+    mat4 projection;
+    mat4 view;
+    float background_grayscale;
+    uint sortFragments;
+    uint fragmentMaxCount;
+    uint sortedFragmentCount;
 } sceneConstants;
 
 ////////////////////////////////////////
@@ -37,9 +37,9 @@ layout(set = 0, binding = 5) uniform sampler2D backgroundTex;
 ////////////////////////////////////////
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out uint outFragIndex;
 
 void main()
 {
-	outColor = texture(backgroundTex, inUV) * sceneConstants.background_grayscale;
+    outColor = texture(backgroundTex, inUV) * sceneConstants.background_grayscale;
 }
-

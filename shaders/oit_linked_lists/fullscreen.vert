@@ -32,4 +32,3 @@ void main()
 	gl_Position = vec4(vertex.xy, 0.0f, 1.0f);
 	outUV = vertex.zw;
 }
-

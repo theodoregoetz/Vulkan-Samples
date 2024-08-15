@@ -16,7 +16,6 @@
  */
 
 #include "oit_linked_lists.h"
-#include <algorithm>
 #include <vulkan/vulkan_core.h>
 
 OITLinkedLists::OITLinkedLists()
@@ -156,10 +155,10 @@ void OITLinkedLists::setup_render_pass()
 
 	dependencies[1].srcSubpass      = 0;
 	dependencies[1].dstSubpass      = 0;
-	dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	dependencies[1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 	dependencies[1].srcAccessMask   = VK_ACCESS_SHADER_WRITE_BIT;
-	dependencies[1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
+	dependencies[1].dstAccessMask   = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
 	dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
 	dependencies[2].srcSubpass      = 0;
@@ -229,7 +228,7 @@ bool OITLinkedLists::prepare(const vkb::ApplicationOptions &options)
 	width  = get_render_context().get_surface_extent().width;
 	height = get_render_context().get_surface_extent().height;
 
-	prepare_gui();
+	//prepare_gui();
 
 	camera.type = vkb::CameraType::LookAt;
 	camera.set_position({0.0f, 0.0f, -4.0f});
@@ -284,6 +283,7 @@ void OITLinkedLists::render(float delta_time)
 
 void OITLinkedLists::request_gpu_features(vkb::PhysicalDevice &gpu)
 {
+    gpu.get_mutable_requested_features().independentBlend = VK_TRUE;
 	if (gpu.get_features().fragmentStoresAndAtomics)
 	{
 		gpu.get_mutable_requested_features().fragmentStoresAndAtomics = VK_TRUE;
@@ -340,30 +340,41 @@ void OITLinkedLists::build_command_buffers()
 				draw_model(object, draw_cmd_buffers[i], kInstanceCount);
 			}
 
-			// image layout transition
-			VkImageSubresourceRange subresource_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-			VkImageMemoryBarrier    image_memory_barrier{};
-			image_memory_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			image_memory_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-			image_memory_barrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-			image_memory_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
-			image_memory_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-			image_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			image_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			image_memory_barrier.image               = linked_list_head_image->get_handle();
-			image_memory_barrier.subresourceRange    = subresource_range;
-			vkCmdPipelineBarrier(draw_cmd_buffers[i], VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
+			{
+			    vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, background_pipeline);
+				vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);
+			}
+
+			{
+    			// image layout transition
+    			VkImageSubresourceRange subresource_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    			VkImageMemoryBarrier    image_memory_barrier{};
+    			image_memory_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    			image_memory_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+    			image_memory_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    			image_memory_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+    			image_memory_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+    			image_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    			image_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    			image_memory_barrier.image               = linked_list_head_image->get_handle();
+    			image_memory_barrier.subresourceRange    = subresource_range;
+    			vkCmdPipelineBarrier(
+                    draw_cmd_buffers[i],
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_DEPENDENCY_BY_REGION_BIT,
+                    0, nullptr, 0, nullptr,
+                    1, &image_memory_barrier);
+			}
 
 			// Combine
 			{
-				vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, background_pipeline);
-				vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);
-
 				vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, combine_pipeline);
 				vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);
 
-				draw_ui(draw_cmd_buffers[i]);
+				//draw_ui(draw_cmd_buffers[i]);
 			}
+
 			vkCmdEndRenderPass(draw_cmd_buffers[i]);
 		}
 		VK_CHECK(vkEndCommandBuffer(draw_cmd_buffers[i]));
@@ -391,6 +402,8 @@ void OITLinkedLists::create_fragment_resources(const uint32_t width, const uint3
 {
 	{
 		const VkExtent3D image_extent = {width, height, 1};
+
+		// need to add this flag somewhere: VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT
 		linked_list_head_image        = std::make_unique<vkb::core::Image>(get_device(), image_extent, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VMA_MEMORY_USAGE_GPU_ONLY, VK_SAMPLE_COUNT_1_BIT);
 		linked_list_head_image_view   = std::make_unique<vkb::core::ImageView>(*linked_list_head_image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R32_UINT);
 	}
@@ -470,7 +483,8 @@ void OITLinkedLists::create_descriptors()
 		    vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
 		    vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
 		};
-		VkDescriptorSetLayoutCreateInfo descriptor_layout_create_info = vkb::initializers::descriptor_set_layout_create_info(set_layout_bindings.data(), static_cast<uint32_t>(set_layout_bindings.size()));
+		VkDescriptorSetLayoutCreateInfo descriptor_layout_create_info = vkb::initializers::descriptor_set_layout_create_info(
+		  set_layout_bindings.data(), static_cast<uint32_t>(set_layout_bindings.size()));
 		VK_CHECK(vkCreateDescriptorSetLayout(get_device().get_handle(), &descriptor_layout_create_info, nullptr, &descriptor_set_layout));
 	}
 
@@ -482,7 +496,8 @@ void OITLinkedLists::create_descriptors()
 		    vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1),
 		};
 		const uint32_t             num_descriptor_sets         = 1;
-		VkDescriptorPoolCreateInfo descriptor_pool_create_info = vkb::initializers::descriptor_pool_create_info(static_cast<uint32_t>(pool_sizes.size()), pool_sizes.data(), num_descriptor_sets);
+		VkDescriptorPoolCreateInfo descriptor_pool_create_info = vkb::initializers::descriptor_pool_create_info(
+		  static_cast<uint32_t>(pool_sizes.size()), pool_sizes.data(), num_descriptor_sets);
 		VK_CHECK(vkCreateDescriptorPool(get_device().get_handle(), &descriptor_pool_create_info, nullptr, &descriptor_pool));
 	}
 
@@ -523,12 +538,12 @@ void OITLinkedLists::create_pipelines()
 		VkPipelineInputAssemblyStateCreateInfo input_assembly_state = vkb::initializers::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
 
 		VkPipelineRasterizationStateCreateInfo rasterization_state = vkb::initializers::pipeline_rasterization_state_create_info(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+		//rasterization_state.rasterizerDiscardEnable = VK_FALSE;
 
-
-		VkPipelineColorBlendAttachmentState blend_attachment_states[2];
-		blend_attachment_states[0] = vkb::initializers::pipeline_color_blend_attachment_state(0xF, VK_FALSE);
-		blend_attachment_states[1] = blend_attachment_states[0];
-		VkPipelineColorBlendStateCreateInfo color_blend_state      = vkb::initializers::pipeline_color_blend_state_create_info(2, blend_attachment_states);
+		auto blend_attachment_state = vkb::initializers::pipeline_color_blend_attachment_state(0xF, VK_FALSE);
+		auto blend_attachment_state_oit = vkb::initializers::pipeline_color_blend_attachment_state(0xF, VK_FALSE);
+		VkPipelineColorBlendAttachmentState blend_attachment_states[2] = {blend_attachment_state, blend_attachment_state_oit};
+		VkPipelineColorBlendStateCreateInfo color_blend_state = vkb::initializers::pipeline_color_blend_state_create_info(2, blend_attachment_states);
 
 		VkPipelineMultisampleStateCreateInfo multisample_state = vkb::initializers::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT, 0);
 
@@ -593,13 +608,21 @@ void OITLinkedLists::create_pipelines()
 			vertex_input_state.vertexAttributeDescriptionCount = 0;
 			vertex_input_state.pVertexAttributeDescriptions    = nullptr;
 
-			blend_attachment_states[0].blendEnable         = VK_TRUE;
-			blend_attachment_states[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-			blend_attachment_states[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-			blend_attachment_states[0].colorBlendOp        = VK_BLEND_OP_ADD;
-			blend_attachment_states[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-			blend_attachment_states[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-			blend_attachment_states[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+			blend_attachment_state.blendEnable         = VK_TRUE;
+			blend_attachment_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			blend_attachment_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			blend_attachment_state.colorBlendOp        = VK_BLEND_OP_ADD;
+			blend_attachment_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			blend_attachment_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+			blend_attachment_state.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+			blend_attachment_state_oit.blendEnable         = VK_TRUE;
+			blend_attachment_state_oit.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+			blend_attachment_state_oit.dstColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+			blend_attachment_state_oit.colorBlendOp        = VK_BLEND_OP_ADD;
+			blend_attachment_state_oit.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			blend_attachment_state_oit.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
+			blend_attachment_state_oit.alphaBlendOp        = VK_BLEND_OP_ADD;
 
 			shader_stages[0] = load_shader("oit_linked_lists/combine.vert", VK_SHADER_STAGE_VERTEX_BIT);
 			shader_stages[1] = load_shader("oit_linked_lists/combine.frag", VK_SHADER_STAGE_FRAGMENT_BIT);

@@ -16,47 +16,52 @@
  * limitations under the License.
  */
 
-layout (location = 0) in vec4 inColor;
+layout(location = 0) in vec4 inColor;
 
 ////////////////////////////////////////
 
 layout(set = 0, binding = 0) uniform SceneConstants
 {
-	mat4  projection;
-	mat4  view;
-	float background_grayscale;
-	uint  sortFragments;
-	uint  fragmentMaxCount;
-	uint  sortedFragmentCount;
+    mat4 projection;
+    mat4 view;
+    float background_grayscale;
+    uint sortFragments;
+    uint fragmentMaxCount;
+    uint sortedFragmentCount;
 } sceneConstants;
 
 layout(set = 0, binding = 2, r32ui) uniform uimage2D linkedListHeadTex;
 
 layout(set = 0, binding = 3) buffer FragmentBuffer {
-	uvec3 data[];
+    uvec3 data[];
 } fragmentBuffer;
 
 layout(set = 0, binding = 4) buffer FragmentCounter {
-	uint value;
+    uint value;
 } fragmentCounter;
 
 ////////////////////////////////////////
 
+layout(location = 0) out vec4 outFragColor;
+layout(location = 1) out uint outFragIndex;
+
 void main()
 {
-	// Get the next fragment index
-	const uint nextFragmentIndex = atomicAdd(fragmentCounter.value, 1U);
+    // Get the next fragment index
+    const uint nextFragmentIndex = atomicAdd(fragmentCounter.value, 1U);
 
-	// Ignore the fragment if the fragment buffer is full
-	if(nextFragmentIndex >= sceneConstants.fragmentMaxCount)
-	{
-		discard;
-	}
+    // Ignore the fragment if the fragment buffer is full
+    if (nextFragmentIndex >= sceneConstants.fragmentMaxCount)
+    {
+        discard;
+    }
 
-	// Update the linked list head
-	const uint previousFragmentIndex = imageAtomicExchange(linkedListHeadTex, ivec2(gl_FragCoord.xy), nextFragmentIndex);
+    // Update the linked list head
+    const uint previousFragmentIndex = imageAtomicExchange(linkedListHeadTex, ivec2(gl_FragCoord.xy), nextFragmentIndex);
 
-	// Add the fragment to the buffer
-	fragmentBuffer.data[nextFragmentIndex] = uvec3(previousFragmentIndex, packUnorm4x8(inColor), floatBitsToUint(gl_FragCoord.z));
+    // Add the fragment to the buffer
+    fragmentBuffer.data[nextFragmentIndex] = uvec3(previousFragmentIndex, packUnorm4x8(inColor), floatBitsToUint(gl_FragCoord.z));
+
+    // pass-through to avoid undefined values
+    outFragColor = outFragColor;
 }
-
